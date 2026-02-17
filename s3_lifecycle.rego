@@ -1,8 +1,7 @@
-package terraform.s3
+package main
 
-# 1. Main rule: Deny if a bucket exists but has no lifecycle config in HCL
-# Standard syntax: rule_name[msg] { ... }
-deny_missing_lifecycle[msg] {
+# 1. Main rule: Returns a list of violations
+deny[msg] {
     some i
     resource := input.resource_changes[i]
     resource.type == "aws_s3_bucket"
@@ -14,7 +13,7 @@ deny_missing_lifecycle[msg] {
     msg := sprintf("Violation: S3 bucket '%v' does not have an associated lifecycle configuration.", [bucket_address])
 }
 
-# 2. Helper: Looks in 'configuration' for HCL-level references
+# 2. Helper: Looks in the 'configuration' block for HCL-level references
 bucket_has_lifecycle_config(bucket_address) {
     some i, j
     resource := input.configuration.root_module.resources[i]
@@ -25,8 +24,8 @@ bucket_has_lifecycle_config(bucket_address) {
     startswith(ref, bucket_address)
 }
 
-# 3. Boolean rule for StackGuardian's "Deciding Query"
-# Returns true if there are zero deny messages
-is_compliant {
-    count(deny_missing_lifecycle) == 0
+# 3. Decision rule: StackGuardian will use this to PASS or FAIL
+# This returns true only if the 'deny' list is empty
+allow {
+    count(deny) == 0
 }
