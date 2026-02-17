@@ -24,7 +24,12 @@ bucket_has_lifecycle_config(bucket_address) {
     startswith(ref, bucket_address)
 }
 
-# 3. Decision rule: This MUST match your OPA Deciding Query in StackGuardian
+# 3. Decision rules (StackGuardian looks for these)
+# We define BOTH so the platform finds a match regardless of its config
+allow {
+    count(deny) == 0
+}
+
 is_compliant {
     count(deny) == 0
 }
