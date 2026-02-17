@@ -1,35 +1,72 @@
-package main
+package terraform.s3
 
-# 1. Main rule: Identifies buckets missing a lifecycle config
-deny[msg] {
+# This line is the "magic" that makes modern OPA CLI and 
+# platforms like StackGuardian work together.
+import future.keywords.if
+import future.keywords.contains
+
+# --- S3 LIFECYCLE RULES ---
+deny contains msg if {
     some i
     resource := input.resource_changes[i]
     resource.type == "aws_s3_bucket"
-    bucket_address := resource.address
-
-    # Validate against the configuration block
-    not bucket_has_lifecycle_config(bucket_address)
-
-    msg := sprintf("Violation: S3 bucket '%v' does not have an associated lifecycle configuration.", [bucket_address])
+    not bucket_has_lifecycle_config(resource.address)
+    msg := sprintf("S3 Violation: Bucket '%v' is missing a lifecycle configuration.", [resource.address])
 }
 
-# 2. Helper: Links the lifecycle resource to the bucket in the HCL configuration
-bucket_has_lifecycle_config(bucket_address) {
+bucket_has_lifecycle_config(bucket_address) if {
     some i, j
     resource := input.configuration.root_module.resources[i]
     resource.type == "aws_s3_bucket_lifecycle_configuration"
-
-    # Verifies the reference exists in the expressions block
     ref := resource.expressions.bucket.references[j]
     startswith(ref, bucket_address)
 }
 
-# 3. Decision rules (StackGuardian looks for these)
-# We define BOTH so the platform finds a match regardless of its config
-allow {
-    count(deny) == 0
+# --- RDS & AURORA RETENTION RULES ---
+db_types := {"aws_db_instance", "aws_rds_cluster"}
+
+deny contains msg if {
+    some i
+    resource := input.resource_changes[i]
+    db_types[resource.type]
+
+    env := get_attribute(resource, "tags").Environment
+    env == "Production"
+
+    retention := get_attribute(resource, "backup_retention_period")
+    retention <= 14
+    msg := sprintf("RDS Violation: Production DB '%v' has %v days retention. Must be > 14.", [resource.address, retention])
 }
 
-is_compliant {
-    count(deny) == 0
+deny contains msg if {
+    some i
+    resource := input.resource_changes[i]
+    db_types[resource.type]
+
+    env := get_attribute(resource, "tags").Environment
+    env != "Production"
+
+    retention := get_attribute(resource, "backup_retention_period")
+    retention != 1
+    msg := sprintf("RDS Violation: Non-prod DB '%v' has %v days retention. Must be exactly 1 day.", [resource.address, retention])
 }
+
+# --- HELPERS ---
+get_attribute(res, attr) = val if {
+    val := res.change.after[attr]
+    val != null
+} else = val if {
+    some i
+    config_res := input.configuration.root_module.resources[i]
+    config_res.address == res.address
+    val := config_res.expressions[attr].constant_value
+} else = 0
+
+# --- STATUS RULES ---
+allow := true if {
+    count(deny) == 0
+} else := false
+
+status := "Pass" if {
+    allow
+} else := "Fail"
